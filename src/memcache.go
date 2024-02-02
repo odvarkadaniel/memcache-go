@@ -24,7 +24,11 @@ func (c *Client) Set(item *Item) error {
 }
 
 func (c *Client) set(item *Item) error {
-	rw, err := c.createReadWriter(item)
+	if ok := isKeyValid(item.Key); !ok {
+		return fmt.Errorf("given key is not valid")
+	}
+
+	rw, err := c.createReadWriter()
 	if err != nil {
 		return err
 	}
@@ -37,7 +41,11 @@ func (c *Client) Add(item *Item) error {
 }
 
 func (c *Client) add(item *Item) error {
-	rw, err := c.createReadWriter(item)
+	if ok := isKeyValid(item.Key); !ok {
+		return fmt.Errorf("given key is not valid")
+	}
+
+	rw, err := c.createReadWriter()
 	if err != nil {
 		return err
 	}
@@ -50,7 +58,11 @@ func (c *Client) Replace(item *Item) error {
 }
 
 func (c *Client) replace(item *Item) error {
-	rw, err := c.createReadWriter(item)
+	if ok := isKeyValid(item.Key); !ok {
+		return fmt.Errorf("given key is not valid")
+	}
+
+	rw, err := c.createReadWriter()
 	if err != nil {
 		return err
 	}
@@ -63,7 +75,11 @@ func (c *Client) Append(item *Item) error {
 }
 
 func (c *Client) append(item *Item) error {
-	rw, err := c.createReadWriter(item)
+	if ok := isKeyValid(item.Key); !ok {
+		return fmt.Errorf("given key is not valid")
+	}
+
+	rw, err := c.createReadWriter()
 	if err != nil {
 		return err
 	}
@@ -76,7 +92,11 @@ func (c *Client) Prepend(item *Item) error {
 }
 
 func (c *Client) prepend(item *Item) error {
-	rw, err := c.createReadWriter(item)
+	if ok := isKeyValid(item.Key); !ok {
+		return fmt.Errorf("given key is not valid")
+	}
+
+	rw, err := c.createReadWriter()
 	if err != nil {
 		return err
 	}
@@ -89,7 +109,11 @@ func (c *Client) CompareAndSwap(item *Item) error {
 }
 
 func (c *Client) compareAndSwap(item *Item) error {
-	rw, err := c.createReadWriter(item)
+	if ok := isKeyValid(item.Key); !ok {
+		return fmt.Errorf("given key is not valid")
+	}
+
+	rw, err := c.createReadWriter()
 	if err != nil {
 		return err
 	}
@@ -98,63 +122,49 @@ func (c *Client) compareAndSwap(item *Item) error {
 }
 
 func (c *Client) Get(key string) (*Item, error) {
+	return c.get(key)
+}
+
+func (c *Client) get(key string) (*Item, error) {
 	if ok := isKeyValid(key); !ok {
 		return nil, errors.New("given key is not valid")
 	}
 
-	addr, err := c.router.pickServer()
+	rw, err := c.createReadWriter()
 	if err != nil {
 		return nil, err
 	}
 
-	conn, err := net.Dial(addr.Network(), addr.String())
-	if err != nil {
-		return nil, err
-	}
-
-	rw := bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
-	verb := "get"
-
-	cmd := fmt.Sprintf("%s %s\r\n", verb, key)
-
-	if _, err := fmt.Fprint(rw, cmd); err != nil {
-		return nil, err
-	}
-
-	if err := rw.Flush(); err != nil {
-		return nil, err
-	}
-
-	line, err := rw.ReadSlice('\n')
-	if err != nil {
-		return nil, err
-	}
-
-	it, err := parseGetResponse(line)
-	if it == nil {
-		if err != nil {
-			return nil, err
-		}
-
-		return nil, ErrCacheMiss
-	}
-
-	val, err := rw.ReadSlice('\n')
-	if err != nil {
-		return nil, err
-	}
-
-	// To get rid of the CRLF
-	it.Value = val[:len(val)-2]
-
-	return it, nil
+	return c.retrieveFn("get", rw, key)
 }
 
-func (c *Client) Gets() {}
+func (c *Client) Gets() {
+	panic("Not yet implemented")
+}
 
-func (c *Client) Delete() {}
+func (c *Client) Delete(key string) error {
+	return c.delete(key)
+}
 
-func (c *Client) Incr() {}
+func (c *Client) delete(key string) error {
+	if ok := isKeyValid(key); !ok {
+		return errors.New("given key is not valid")
+	}
+
+	rw, err := c.createReadWriter()
+	if err != nil {
+		return err
+	}
+
+	return c.retrieveWithoutItem("delete", rw, key)
+}
+
+func (c *Client) Incr() {
+	// Plan (probably wrong):
+	// 1. Get the item by key
+	// 2. Replace the keys' value (if numerical)
+	// 2a. That is done by doing item.Value + incrVal
+}
 
 func (c *Client) Decr() {}
 
@@ -170,24 +180,6 @@ func isKeyValid(key string) bool {
 	}
 
 	return true
-}
-
-func parseGetResponse(resp []byte) (*Item, error) {
-	if string(resp) == "END\r\n" {
-		return nil, nil
-	}
-
-	splitResp := strings.Split(string(resp), " ")
-	// fmt.Println(splitResp[0], splitResp[1], splitResp[2], splitResp[3])
-
-	flags, _ := strconv.ParseInt(splitResp[2], 10, 32)
-
-	it := &Item{
-		Key:   splitResp[1],
-		Flags: int32(flags),
-	}
-
-	return it, nil
 }
 
 func (c *Client) storageFn(verb string, rw *bufio.ReadWriter, item *Item) error {
@@ -222,11 +214,7 @@ func (c *Client) storageFn(verb string, rw *bufio.ReadWriter, item *Item) error 
 	return nil
 }
 
-func (c *Client) createReadWriter(item *Item) (*bufio.ReadWriter, error) {
-	if ok := isKeyValid(item.Key); !ok {
-		return nil, errors.New("given key is not valid")
-	}
-
+func (c *Client) createReadWriter() (*bufio.ReadWriter, error) {
 	addr, err := c.router.pickServer()
 	if err != nil {
 		return nil, err
@@ -265,6 +253,101 @@ func parseStorageResponse(rw *bufio.ReadWriter) error {
 	}
 }
 
-func (c *Client) retrieveFn(verb string, rw *bufio.ReadWriter, key string) error {
-	return nil
+func (c *Client) retrieveFn(verb string, rw *bufio.ReadWriter, key string) (*Item, error) {
+	var cmd string
+
+	if verb == "cas" {
+		return nil, fmt.Errorf("TODO: CAS not yet implemented for retrieval commands")
+	} else {
+		cmd = fmt.Sprintf("%s %s\r\n", verb, key)
+	}
+
+	if _, err := fmt.Fprint(rw, cmd); err != nil {
+		return nil, err
+	}
+
+	if err := rw.Flush(); err != nil {
+		return nil, err
+	}
+
+	line, err := rw.ReadSlice('\n')
+	if err != nil {
+		return nil, err
+	}
+
+	it, err := parseRetrieveResponse(verb, line)
+	if it == nil {
+		if err != nil {
+			return nil, err
+		}
+
+		if verb == "delete" {
+			return nil, nil
+		}
+
+		return nil, ErrCacheMiss
+	}
+
+	if verb == "delete" {
+		return nil, nil
+	}
+
+	val, err := rw.ReadSlice('\n')
+	if err != nil {
+		return nil, err
+	}
+
+	// To get rid of the CRLF
+	it.Value = val[:len(val)-2]
+
+	return it, nil
+}
+
+func (c *Client) retrieveWithoutItem(verb string, rw *bufio.ReadWriter, key string) error {
+	_, err := c.retrieveFn("delete", rw, key)
+
+	return err
+}
+
+func parseRetrieveResponse(verb string, resp []byte) (*Item, error) {
+	switch verb {
+	case "delete":
+		return nil, parseDelete(resp)
+	case "get":
+		return parseGet(resp)
+	default:
+		panic("TODO: should not happen...")
+	}
+}
+
+func parseGet(resp []byte) (*Item, error) {
+	if bytes.Equal(resp, []byte("END\r\n")) {
+		return nil, nil
+	}
+
+	splitResp := strings.Split(string(resp), " ")
+	// fmt.Println(splitResp[0], splitResp[1], splitResp[2], splitResp[3])
+
+	flags, _ := strconv.ParseInt(splitResp[2], 10, 32)
+
+	it := &Item{
+		Key:   splitResp[1],
+		Flags: int32(flags),
+	}
+
+	return it, nil
+}
+
+func parseDelete(resp []byte) error {
+	switch {
+	case bytes.Equal(resp, []byte("DELETED\r\n")):
+		return nil
+	case bytes.Equal(resp, []byte("END\r\n")):
+		return ErrError
+	case bytes.Equal(resp, []byte("NOT_FOUND\r\n")):
+		return ErrCacheMiss
+	default:
+		// This should not happen.
+		panic(string(resp) + " is not a valid response")
+	}
 }

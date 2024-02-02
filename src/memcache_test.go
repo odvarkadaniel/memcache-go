@@ -16,6 +16,7 @@ var _ = Describe("Memcache Client Tests", Label("StorageCommands"), func() {
 	var appendIt *Item
 	var prependIt *Item
 	var lowExpIt *Item
+	var toDeleteIt *Item
 
 	BeforeEach(func() {
 		mc = New(TCP, []string{defaultAddr})
@@ -55,9 +56,16 @@ var _ = Describe("Memcache Client Tests", Label("StorageCommands"), func() {
 			Flags:      0,
 			CAS:        0,
 		}
+		toDeleteIt = &Item{
+			Key:        "delete_me",
+			Value:      []byte("nooow!"),
+			Expiration: time.Second * 60,
+			Flags:      0,
+			CAS:        0,
+		}
 	})
 
-	It("Memcache Storage Commands with a working client", func() {
+	It("Memcache Commands with a working client", func() {
 		By("Append on a key that doesn't exist")
 		err := mc.Append(appendIt)
 		Expect(err).To(HaveOccurred())
@@ -92,6 +100,18 @@ var _ = Describe("Memcache Client Tests", Label("StorageCommands"), func() {
 		time.Sleep(time.Second * 5)
 		it, err := mc.Get(lowExpIt.Key)
 		Expect(it).To(BeNil())
+		Expect(err).To(HaveOccurred())
+
+		By("Creating a new item and deleting it")
+		err = mc.Set(toDeleteIt)
+		Expect(err).ToNot(HaveOccurred())
+		resDel, err := mc.Get(toDeleteIt.Key)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(resDel.Value).To(Equal(toDeleteIt.Value))
+		Expect(resDel.Flags).To(Equal(toDeleteIt.Flags))
+		err = mc.Delete(resDel.Key)
+		Expect(err).ToNot(HaveOccurred())
+		_, err = mc.Get(toDeleteIt.Key)
 		Expect(err).To(HaveOccurred())
 	})
 })
