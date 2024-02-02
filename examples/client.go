@@ -18,7 +18,7 @@ func main() {
 
 	cl.Set(&memcache.Item{
 		Key:        "hello",
-		Data:       []byte("world"),
+		Value:      []byte("world"),
 		Expiration: time.Second * 60,
 		Flags:      0,
 	})
@@ -30,5 +30,5 @@ func main() {
 		return
 	}
 
-	fmt.Println(it.Key, "=>", string(it.Data))
+	fmt.Println(it.Key, "=>", string(it.Value))
 }

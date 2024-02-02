@@ -145,7 +145,7 @@ func (c *Client) Get(key string) (*Item, error) {
 	}
 
 	fmt.Println(string(val))
-	it.Data = val
+	it.Value = val
 
 	return it, nil
 }
@@ -198,20 +198,20 @@ func (c *Client) storageFn(verb string, rw *bufio.ReadWriter, item *Item) error 
 		item.Expiration = 1000
 
 		cmd = fmt.Sprintf("%s %s %d %d %d %d\r\n",
-			verb, item.Key, item.Flags, item.Expiration, len(item.Data), item.CAS)
+			verb, item.Key, item.Flags, item.Expiration, len(item.Value), item.CAS)
 	} else {
 		item.Flags = 0
 		item.Expiration = 1000
 
 		cmd = fmt.Sprintf("%s %s %d %d %d\r\n",
-			verb, item.Key, item.Flags, item.Expiration, len(item.Data))
+			verb, item.Key, item.Flags, item.Expiration, len(item.Value))
 	}
 
 	if _, err := fmt.Fprint(rw, cmd); err != nil {
 		return err
 	}
 
-	if _, err := rw.Write(item.Data); err != nil {
+	if _, err := rw.Write(item.Value); err != nil {
 		return err
 	}
 	if _, err := rw.Write([]byte("\r\n")); err != nil {
@@ -269,4 +269,8 @@ func parseStorageResponse(rw *bufio.ReadWriter) error {
 		// This should not happen.
 		panic(string(line) + " is not a valid response")
 	}
+}
+
+func (c *Client) retrieveFn(verb string, rw *bufio.ReadWriter, key string) error {
+	return nil
 }
