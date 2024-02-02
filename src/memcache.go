@@ -115,7 +115,7 @@ func (c *Client) Get(key string) (*Item, error) {
 	rw := bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
 	verb := "get"
 
-	cmd := fmt.Sprintf("%s %s \r\n", verb, key)
+	cmd := fmt.Sprintf("%s %s\r\n", verb, key)
 
 	if _, err := fmt.Fprint(rw, cmd); err != nil {
 		return nil, err
@@ -136,7 +136,7 @@ func (c *Client) Get(key string) (*Item, error) {
 			return nil, err
 		}
 
-		return nil, nil
+		return nil, ErrCacheMiss
 	}
 
 	val, err := rw.ReadSlice('\n')
@@ -144,8 +144,8 @@ func (c *Client) Get(key string) (*Item, error) {
 		return nil, err
 	}
 
-	fmt.Println(string(val))
-	it.Value = val
+	// To get rid of the CRLF
+	it.Value = val[:len(val)-2]
 
 	return it, nil
 }
@@ -178,7 +178,7 @@ func parseGetResponse(resp []byte) (*Item, error) {
 	}
 
 	splitResp := strings.Split(string(resp), " ")
-	fmt.Println(splitResp[0], splitResp[1], splitResp[2], splitResp[3])
+	// fmt.Println(splitResp[0], splitResp[1], splitResp[2], splitResp[3])
 
 	flags, _ := strconv.ParseInt(splitResp[2], 10, 32)
 
@@ -194,17 +194,11 @@ func (c *Client) storageFn(verb string, rw *bufio.ReadWriter, item *Item) error 
 	var cmd string
 
 	if verb == "cas" {
-		item.Flags = 0
-		item.Expiration = 1000
-
 		cmd = fmt.Sprintf("%s %s %d %d %d %d\r\n",
-			verb, item.Key, item.Flags, item.Expiration, len(item.Value), item.CAS)
+			verb, item.Key, item.Flags, int(item.Expiration.Seconds()), len(item.Value), item.CAS)
 	} else {
-		item.Flags = 0
-		item.Expiration = 1000
-
 		cmd = fmt.Sprintf("%s %s %d %d %d\r\n",
-			verb, item.Key, item.Flags, item.Expiration, len(item.Value))
+			verb, item.Key, item.Flags, int(item.Expiration.Seconds()), len(item.Value))
 	}
 
 	if _, err := fmt.Fprint(rw, cmd); err != nil {
@@ -264,7 +258,7 @@ func parseStorageResponse(rw *bufio.ReadWriter) error {
 	case bytes.Equal(line, []byte("EXISTS\r\n")):
 		return ErrExists
 	case bytes.Equal(line, []byte("NOT_FOUND\r\n")):
-		return ErrNotFound
+		return ErrCacheMiss
 	default:
 		// This should not happen.
 		panic(string(line) + " is not a valid response")

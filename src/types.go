@@ -20,7 +20,7 @@ var (
 	ErrError               = errors.New("incorrect syntax or error while saving the Value")
 	ErrClientError         = errors.New("failed to store Value while appending/prepending")
 	ErrExists              = errors.New("someone else has modified the CAS Value since last fetch")
-	ErrNotFound            = errors.New("key does not exist in the server")
+	ErrCacheMiss           = errors.New("key does not exist in the server")
 )
 
 type Item struct {
