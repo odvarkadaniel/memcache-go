@@ -267,7 +267,7 @@ func (c *Client) createReadWriter() (*bufio.ReadWriter, error) {
 }
 
 func (c *Client) getFreeConn(addr string) (*net.Conn, bool) {
-	if c.connPool == nil {
+	if c.connPool[addr] == nil {
 		c.connPool = make(map[string]*ConnPool)
 		return nil, false
 	}
@@ -348,12 +348,8 @@ func (c *Client) retrieveFn(verb string, rw *bufio.ReadWriter, key string) (*Ite
 	}
 
 	it, err := parseGet(line)
-	if it == nil {
-		if err != nil {
-			return nil, err
-		}
-
-		return nil, ErrCacheMiss
+	if err != nil && errors.Is(err, ErrCacheMiss) {
+		return nil, err
 	}
 
 	val, err := rw.ReadSlice('\n')
@@ -409,17 +405,15 @@ func parseIncrDecr(resp []byte) (uint64, error) {
 
 func parseGet(resp []byte) (*Item, error) {
 	if bytes.Equal(resp, []byte("END\r\n")) {
-		return nil, nil
+		return nil, ErrCacheMiss
 	}
 
 	splitResp := strings.Split(string(resp), " ")
 
-	flags, _ := strconv.ParseInt(splitResp[2], 10, 32)
+	flags, _ := strconv.Atoi(splitResp[2])
 
-	it := &Item{
+	return &Item{
 		Key:   splitResp[1],
 		Flags: int32(flags),
-	}
-
-	return it, nil
+	}, nil
 }

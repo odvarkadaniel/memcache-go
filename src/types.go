@@ -2,6 +2,7 @@ package memcache
 
 import (
 	"errors"
+	"sync"
 	"time"
 )
 
@@ -32,8 +33,10 @@ type Item struct {
 }
 
 type Client struct {
-	router   *ServerList
-	connPool map[string]*ConnPool
+	// mu       sync.Mutex
+	router      *ServerList
+	connPool    map[string]*ConnPool
+	getBuffPool *sync.Pool
 
 	// ...
 }

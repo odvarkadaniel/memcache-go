@@ -28,7 +28,7 @@ var _ = BeforeSuite(func() {
 	Expect(err).ToNot(HaveOccurred(), "failed to start memcached")
 
 	for i := 0; i < 5; i++ {
-		if nc, err := net.Dial("tcp", "localhost:11211"); err == nil {
+		if nc, err := net.Dial("tcp", "127.0.0.1:11211"); err == nil {
 			nc.Close()
 			break
 		}
