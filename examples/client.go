@@ -30,6 +30,7 @@ func main() {
 
 	st := time.Now()
 	for i := 0; i < 200000; i++ {
+		item.Key = "test" + fmt.Sprint(i)
 		cl.Set(item)
 	}
 	fmt.Println("Final time: ", time.Since(st))

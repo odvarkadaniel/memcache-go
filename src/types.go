@@ -2,7 +2,6 @@ package memcache
 
 import (
 	"errors"
-	"net"
 	"time"
 )
 
@@ -34,7 +33,7 @@ type Item struct {
 
 type Client struct {
 	router   *ServerList
-	connPool map[string]*net.Conn
+	connPool map[string]*ConnPool
 
 	// ...
 }

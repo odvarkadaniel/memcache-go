@@ -245,12 +245,39 @@ func (c *Client) createReadWriter() (*bufio.ReadWriter, error) {
 		return nil, err
 	}
 
+	// Look into cache for a connection
+	if conn, ok := c.getFreeConn(addr.String()); ok {
+		return bufio.NewReadWriter(bufio.NewReader(*conn), bufio.NewWriter(*conn)), nil
+	}
+
 	conn, err := net.Dial(addr.Network(), addr.String())
 	if err != nil {
 		return nil, err
 	}
 
+	x := &ConnPool{
+		idle:   []*net.Conn{&conn},
+		client: c,
+		rw:     bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn)),
+	}
+
+	c.connPool[addr.String()] = x
+
 	return bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn)), nil
+}
+
+func (c *Client) getFreeConn(addr string) (*net.Conn, bool) {
+	if c.connPool == nil {
+		c.connPool = make(map[string]*ConnPool)
+		return nil, false
+	}
+
+	conn := c.connPool[addr]
+	if conn.idle[0] != nil {
+		return conn.idle[0], true
+	}
+
+	return nil, false
 }
 
 func parseStorageResponse(rw *bufio.ReadWriter) error {
