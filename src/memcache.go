@@ -10,9 +10,9 @@ import (
 	"strings"
 )
 
-func New(connType ConnType, addresses []string) *Client {
+func New(addresses []string) *Client {
 	sl := &ServerList{}
-	if err := sl.addServer(connType, addresses...); err != nil {
+	if err := sl.addServer(addresses...); err != nil {
 		return nil
 	}
 
@@ -156,17 +156,42 @@ func (c *Client) delete(key string) error {
 		return err
 	}
 
-	return c.retrieveWithoutItem("delete", rw, key)
+	return c.deleteFn("delete", rw, key)
 }
 
-func (c *Client) Incr() {
-	// Plan (probably wrong):
-	// 1. Get the item by key
-	// 2. Replace the keys' value (if numerical)
-	// 2a. That is done by doing item.Value + incrVal
+func (c *Client) Incr(key string, delta uint64) (uint64, error) {
+	return c.incr(key, delta)
 }
 
-func (c *Client) Decr() {}
+func (c *Client) incr(key string, delta uint64) (uint64, error) {
+	if ok := isKeyValid(key); !ok {
+		return 0, errors.New("given key is not valid")
+	}
+
+	rw, err := c.createReadWriter()
+	if err != nil {
+		return 0, err
+	}
+
+	return c.incrDecrFn("incr", rw, key, delta)
+}
+
+func (c *Client) Decr(key string, delta uint64) (uint64, error) {
+	return c.decr(key, delta)
+}
+
+func (c *Client) decr(key string, delta uint64) (uint64, error) {
+	if ok := isKeyValid(key); !ok {
+		return 0, errors.New("given key is not valid")
+	}
+
+	rw, err := c.createReadWriter()
+	if err != nil {
+		return 0, err
+	}
+
+	return c.incrDecrFn("decr", rw, key, delta)
+}
 
 func isKeyValid(key string) bool {
 	if len(key) > 250 {
@@ -253,15 +278,7 @@ func parseStorageResponse(rw *bufio.ReadWriter) error {
 	}
 }
 
-func (c *Client) retrieveFn(verb string, rw *bufio.ReadWriter, key string) (*Item, error) {
-	var cmd string
-
-	if verb == "cas" {
-		return nil, fmt.Errorf("TODO: CAS not yet implemented for retrieval commands")
-	} else {
-		cmd = fmt.Sprintf("%s %s\r\n", verb, key)
-	}
-
+func writeFlushRead(rw *bufio.ReadWriter, cmd string) ([]byte, error) {
 	if _, err := fmt.Fprint(rw, cmd); err != nil {
 		return nil, err
 	}
@@ -275,21 +292,41 @@ func (c *Client) retrieveFn(verb string, rw *bufio.ReadWriter, key string) (*Ite
 		return nil, err
 	}
 
-	it, err := parseRetrieveResponse(verb, line)
+	return line, nil
+}
+
+func (c *Client) incrDecrFn(verb string, rw *bufio.ReadWriter, key string, delta uint64) (uint64, error) {
+	cmd := fmt.Sprintf("%s %s %d\r\n", verb, key, delta)
+
+	line, err := writeFlushRead(rw, cmd)
+	if err != nil {
+		return 0, err
+	}
+
+	return parseIncrDecr(line)
+}
+
+func (c *Client) retrieveFn(verb string, rw *bufio.ReadWriter, key string) (*Item, error) {
+	var cmd string
+
+	if verb == "cas" {
+		return nil, fmt.Errorf("TODO: CAS not yet implemented for retrieval commands")
+	} else {
+		cmd = fmt.Sprintf("%s %s\r\n", verb, key)
+	}
+
+	line, err := writeFlushRead(rw, cmd)
+	if err != nil {
+		return nil, err
+	}
+
+	it, err := parseGet(line)
 	if it == nil {
 		if err != nil {
 			return nil, err
 		}
 
-		if verb == "delete" {
-			return nil, nil
-		}
-
 		return nil, ErrCacheMiss
-	}
-
-	if verb == "delete" {
-		return nil, nil
 	}
 
 	val, err := rw.ReadSlice('\n')
@@ -303,39 +340,19 @@ func (c *Client) retrieveFn(verb string, rw *bufio.ReadWriter, key string) (*Ite
 	return it, nil
 }
 
-func (c *Client) retrieveWithoutItem(verb string, rw *bufio.ReadWriter, key string) error {
-	_, err := c.retrieveFn("delete", rw, key)
+func (c *Client) deleteFn(verb string, rw *bufio.ReadWriter, key string) error {
+	cmd := fmt.Sprintf("%s %s\r\n", verb, key)
 
-	return err
-}
-
-func parseRetrieveResponse(verb string, resp []byte) (*Item, error) {
-	switch verb {
-	case "delete":
-		return nil, parseDelete(resp)
-	case "get":
-		return parseGet(resp)
-	default:
-		panic("TODO: should not happen...")
-	}
-}
-
-func parseGet(resp []byte) (*Item, error) {
-	if bytes.Equal(resp, []byte("END\r\n")) {
-		return nil, nil
+	line, err := writeFlushRead(rw, cmd)
+	if err != nil {
+		return err
 	}
 
-	splitResp := strings.Split(string(resp), " ")
-	// fmt.Println(splitResp[0], splitResp[1], splitResp[2], splitResp[3])
-
-	flags, _ := strconv.ParseInt(splitResp[2], 10, 32)
-
-	it := &Item{
-		Key:   splitResp[1],
-		Flags: int32(flags),
+	if err := parseDelete(line); err != nil {
+		return err
 	}
 
-	return it, nil
+	return nil
 }
 
 func parseDelete(resp []byte) error {
@@ -350,4 +367,32 @@ func parseDelete(resp []byte) error {
 		// This should not happen.
 		panic(string(resp) + " is not a valid response")
 	}
+}
+
+func parseIncrDecr(resp []byte) (uint64, error) {
+	switch {
+	case bytes.Equal(resp, []byte("NOT_FOUND\r\n")):
+		return 0, ErrCacheMiss
+	case bytes.HasPrefix(resp, []byte("CLIENT_ERROR ")):
+		return 0, fmt.Errorf(string(resp[13:]))
+	}
+
+	return strconv.ParseUint(string(resp[:len(resp)-2]), 10, 64)
+}
+
+func parseGet(resp []byte) (*Item, error) {
+	if bytes.Equal(resp, []byte("END\r\n")) {
+		return nil, nil
+	}
+
+	splitResp := strings.Split(string(resp), " ")
+
+	flags, _ := strconv.ParseInt(splitResp[2], 10, 32)
+
+	it := &Item{
+		Key:   splitResp[1],
+		Flags: int32(flags),
+	}
+
+	return it, nil
 }

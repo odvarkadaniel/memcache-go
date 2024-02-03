@@ -17,9 +17,10 @@ var _ = Describe("Memcache Client Tests", Label("StorageCommands"), func() {
 	var prependIt *Item
 	var lowExpIt *Item
 	var toDeleteIt *Item
+	var toIncr *Item
 
 	BeforeEach(func() {
-		mc = New(TCP, []string{defaultAddr})
+		mc = New([]string{defaultAddr})
 
 		it1 = &Item{
 			Key:        "hello",
@@ -59,6 +60,13 @@ var _ = Describe("Memcache Client Tests", Label("StorageCommands"), func() {
 		toDeleteIt = &Item{
 			Key:        "delete_me",
 			Value:      []byte("nooow!"),
+			Expiration: time.Second * 60,
+			Flags:      0,
+			CAS:        0,
+		}
+		toIncr = &Item{
+			Key:        "incr_val",
+			Value:      []byte("10"),
 			Expiration: time.Second * 60,
 			Flags:      0,
 			CAS:        0,
@@ -113,5 +121,21 @@ var _ = Describe("Memcache Client Tests", Label("StorageCommands"), func() {
 		Expect(err).ToNot(HaveOccurred())
 		_, err = mc.Get(toDeleteIt.Key)
 		Expect(err).To(HaveOccurred())
+
+		By("Creating a new item and incrementing it")
+		err = mc.Set(toIncr)
+		Expect(err).ToNot(HaveOccurred())
+		newVal, err := mc.Incr(toIncr.Key, 10)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(newVal).To(Equal(uint64(20)))
+
+		By("Trying to increment a key that does not exist")
+		_, err = mc.Incr("non_existing_key", 100)
+		Expect(err).To(HaveOccurred())
+
+		By("Trying to increment a key whose value is not numeric")
+		_, err = mc.Incr(it1.Key, 100)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(Equal("cannot increment or decrement non-numeric value\r\n"))
 	})
 })
