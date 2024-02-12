@@ -9,15 +9,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.21'
     - name: Install memcached
       run: sudo apt-get install memcached
     - name: Install ginkgo
       run: |
-          go get github.com/onsi/ginkgo/v2/ginkgo@latest
-          go get github.com/onsi/gomega/...
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.21'
+          go install github.com/onsi/ginkgo/v2/ginkgo@latest
     - name: Test
-      run: go run github.com/onsi/ginkgo/v2/ginkgo src/
+      run: ginkgo src/
