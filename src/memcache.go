@@ -166,12 +166,12 @@ func (c *Client) delete(key string) error {
 		return errors.New("given key is not valid")
 	}
 
-	rw, err := c.createReadWriter()
+	cn, err := c.createReadWriter2()
 	if err != nil {
 		return err
 	}
 
-	return c.deleteFn("delete", rw, key)
+	return c.deleteFn("delete", cn, key)
 }
 
 func (c *Client) Incr(key string, delta uint64) (uint64, error) {
@@ -183,12 +183,12 @@ func (c *Client) incr(key string, delta uint64) (uint64, error) {
 		return 0, errors.New("given key is not valid")
 	}
 
-	rw, err := c.createReadWriter()
+	cn, err := c.createReadWriter2()
 	if err != nil {
 		return 0, err
 	}
 
-	return c.incrDecrFn("incr", rw, key, delta)
+	return c.incrDecrFn("incr", cn, key, delta)
 }
 
 func (c *Client) Decr(key string, delta uint64) (uint64, error) {
@@ -200,12 +200,12 @@ func (c *Client) decr(key string, delta uint64) (uint64, error) {
 		return 0, errors.New("given key is not valid")
 	}
 
-	rw, err := c.createReadWriter()
+	cn, err := c.createReadWriter2()
 	if err != nil {
 		return 0, err
 	}
 
-	return c.incrDecrFn("decr", rw, key, delta)
+	return c.incrDecrFn("decr", cn, key, delta)
 }
 
 func isKeyValid(key string) bool {
@@ -435,10 +435,12 @@ func writeFlushRead(rw *bufio.ReadWriter, cmd string) ([]byte, error) {
 	return line, nil
 }
 
-func (c *Client) incrDecrFn(verb string, rw *bufio.ReadWriter, key string, delta uint64) (uint64, error) {
+func (c *Client) incrDecrFn(verb string, cn *Connection, key string, delta uint64) (uint64, error) {
+	defer c.putBackConnection(cn)
+
 	cmd := fmt.Sprintf("%s %s %d\r\n", verb, key, delta)
 
-	line, err := writeFlushRead(rw, cmd)
+	line, err := writeFlushRead(cn.rw, cmd)
 	if err != nil {
 		return 0, err
 	}
@@ -481,21 +483,19 @@ func (c *Client) retrieveFn(verb string, cn *Connection, key string) (*Item, err
 	it.Value = val[:len(val)-2]
 
 	// Parse the final END\r\n
-	if resp, err := cn.rw.ReadSlice('\n'); err != nil {
+	if _, err := cn.rw.ReadSlice('\n'); err != nil {
 		return nil, err
-	} else {
-		if bytes.Equal(resp, []byte("END\r\n")) {
-			return nil, ErrCacheMiss
-		}
 	}
 
 	return it, nil
 }
 
-func (c *Client) deleteFn(verb string, rw *bufio.ReadWriter, key string) error {
+func (c *Client) deleteFn(verb string, cn *Connection, key string) error {
 	cmd := fmt.Sprintf("%s %s\r\n", verb, key)
 
-	line, err := writeFlushRead(rw, cmd)
+	defer c.putBackConnection(cn)
+
+	line, err := writeFlushRead(cn.rw, cmd)
 	if err != nil {
 		return err
 	}
