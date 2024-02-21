@@ -8,6 +8,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"time"
 )
 
 func New(addresses []string) *Client {
@@ -42,12 +43,12 @@ func (c *Client) set(item *Item) error {
 		return fmt.Errorf("given key is not valid")
 	}
 
-	rw, err := c.createReadWriter2()
+	cn, err := c.createReadWriter2()
 	if err != nil {
 		return err
 	}
 
-	return c.storageFn("set", rw.rw, item)
+	return c.storageFn("set", cn, item)
 }
 
 func (c *Client) Add(item *Item) error {
@@ -59,12 +60,12 @@ func (c *Client) add(item *Item) error {
 		return fmt.Errorf("given key is not valid")
 	}
 
-	rw, err := c.createReadWriter()
+	cn, err := c.createReadWriter2()
 	if err != nil {
 		return err
 	}
 
-	return c.storageFn("add", rw, item)
+	return c.storageFn("add", cn, item)
 }
 
 func (c *Client) Replace(item *Item) error {
@@ -76,12 +77,12 @@ func (c *Client) replace(item *Item) error {
 		return fmt.Errorf("given key is not valid")
 	}
 
-	rw, err := c.createReadWriter()
+	cn, err := c.createReadWriter2()
 	if err != nil {
 		return err
 	}
 
-	return c.storageFn("replace", rw, item)
+	return c.storageFn("replace", cn, item)
 }
 
 func (c *Client) Append(item *Item) error {
@@ -93,12 +94,12 @@ func (c *Client) append(item *Item) error {
 		return fmt.Errorf("given key is not valid")
 	}
 
-	rw, err := c.createReadWriter()
+	cn, err := c.createReadWriter2()
 	if err != nil {
 		return err
 	}
 
-	return c.storageFn("append", rw, item)
+	return c.storageFn("append", cn, item)
 }
 
 func (c *Client) Prepend(item *Item) error {
@@ -110,12 +111,12 @@ func (c *Client) prepend(item *Item) error {
 		return fmt.Errorf("given key is not valid")
 	}
 
-	rw, err := c.createReadWriter()
+	cn, err := c.createReadWriter2()
 	if err != nil {
 		return err
 	}
 
-	return c.storageFn("prepend", rw, item)
+	return c.storageFn("prepend", cn, item)
 }
 
 func (c *Client) CompareAndSwap(item *Item) error {
@@ -127,12 +128,12 @@ func (c *Client) compareAndSwap(item *Item) error {
 		return fmt.Errorf("given key is not valid")
 	}
 
-	rw, err := c.createReadWriter()
+	cn, err := c.createReadWriter2()
 	if err != nil {
 		return err
 	}
 
-	return c.storageFn("cas", rw, item)
+	return c.storageFn("cas", cn, item)
 }
 
 func (c *Client) Get(key string) (*Item, error) {
@@ -144,12 +145,12 @@ func (c *Client) get(key string) (*Item, error) {
 		return nil, errors.New("given key is not valid")
 	}
 
-	rw, err := c.createReadWriter2()
+	cn, err := c.createReadWriter2()
 	if err != nil {
 		return nil, err
 	}
 
-	return c.retrieveFn("get", rw.rw, key)
+	return c.retrieveFn("get", cn, key)
 }
 
 func (c *Client) Gets() {
@@ -221,8 +222,10 @@ func isKeyValid(key string) bool {
 	return true
 }
 
-func (c *Client) storageFn(verb string, rw *bufio.ReadWriter, item *Item) error {
+func (c *Client) storageFn(verb string, cn *Connection, item *Item) error {
 	var cmd string
+
+	defer c.putBackConnection(cn)
 
 	if verb == "cas" {
 		cmd = fmt.Sprintf("%s %s %d %d %d %d\r\n",
@@ -232,25 +235,48 @@ func (c *Client) storageFn(verb string, rw *bufio.ReadWriter, item *Item) error 
 			verb, item.Key, item.Flags, int(item.Expiration.Seconds()), len(item.Value))
 	}
 
-	if _, err := fmt.Fprint(rw, cmd); err != nil {
+	if _, err := fmt.Fprint(cn.rw, cmd); err != nil {
 		return err
 	}
 
-	if _, err := rw.Write(item.Value); err != nil {
+	if _, err := cn.rw.Write(item.Value); err != nil {
 		return err
 	}
-	if _, err := rw.Write([]byte("\r\n")); err != nil {
+	if _, err := cn.rw.Write([]byte("\r\n")); err != nil {
 		return err
 	}
-	if err := rw.Flush(); err != nil {
-		return err
-	}
-
-	if err := parseStorageResponse(rw); err != nil {
+	if err := cn.rw.Flush(); err != nil {
 		return err
 	}
 
-	return nil
+	line, err := cn.rw.ReadSlice('\n')
+	if err != nil {
+		return err
+	}
+
+	switch {
+	case bytes.Equal(line, []byte("STORED\r\n")):
+		return nil
+	case bytes.Equal(line, []byte("ERROR\r\n")):
+		return ErrError
+	case bytes.Equal(line, []byte("NOT_STORED\r\n")):
+		return ErrNotStored
+	case bytes.Equal(line, []byte("CLIENT_ERROR\r\n")):
+		return ErrClientError
+	case bytes.Equal(line, []byte("EXISTS\r\n")):
+		return ErrExists
+	case bytes.Equal(line, []byte("NOT_FOUND\r\n")):
+		return ErrCacheMiss
+	default:
+		// This should not happen.
+		panic(string(line) + " is not a valid response")
+	}
+
+	// if err := parseStorageResponse(cn.rw); err != nil {
+	// 	return err
+	// }
+
+	// return nil
 }
 
 func (c *Client) createReadWriter() (*bufio.ReadWriter, error) {
@@ -332,16 +358,23 @@ func (c *Client) createReadWriter2() (*Connection, error) {
 }
 
 func (c *Client) getFreeConn2(addr string) *Connection {
-	for _, cn := range c.connPool[addr] {
-		return cn
-	}
+	for {
+		for i, cn := range c.connPool[addr] {
+			c.connPool[addr] = c.connPool[addr][i+1:]
+			cn.owner = addr
 
-	return nil
+			// fmt.Println("Len 1cn:", len(c.connPool[cn.owner]))
+
+			return cn
+		}
+		// TODO: Solve this better.
+		fmt.Println("Waiting for free connection...")
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func (c *Client) getFreeConn(addr string) (net.Conn, bool) {
 	if c.connPool[addr] == nil {
-		fmt.Println("here")
 		c.connPool = make(map[string][]*Connection)
 		return nil, false
 	}
@@ -413,8 +446,15 @@ func (c *Client) incrDecrFn(verb string, rw *bufio.ReadWriter, key string, delta
 	return parseIncrDecr(line)
 }
 
-func (c *Client) retrieveFn(verb string, rw *bufio.ReadWriter, key string) (*Item, error) {
+func (c *Client) putBackConnection(cn *Connection) {
+	c.connPool[cn.owner] = append(c.connPool[cn.owner], cn)
+	cn.owner = ""
+}
+
+func (c *Client) retrieveFn(verb string, cn *Connection, key string) (*Item, error) {
 	var cmd string
+
+	defer c.putBackConnection(cn)
 
 	if verb == "cas" {
 		return nil, fmt.Errorf("TODO: CAS not yet implemented for retrieval commands")
@@ -422,23 +462,32 @@ func (c *Client) retrieveFn(verb string, rw *bufio.ReadWriter, key string) (*Ite
 		cmd = fmt.Sprintf("%s %s\r\n", verb, key)
 	}
 
-	line, err := writeFlushRead(rw, cmd)
+	line, err := writeFlushRead(cn.rw, cmd)
 	if err != nil {
 		return nil, err
 	}
 
-	it, err := parseGet(line)
+	it, err := parseGetResponse(line)
 	if err != nil && errors.Is(err, ErrCacheMiss) {
 		return nil, err
 	}
 
-	val, err := rw.ReadSlice('\n')
+	val, err := cn.rw.ReadSlice('\n')
 	if err != nil {
 		return nil, err
 	}
 
 	// To get rid of the CRLF
 	it.Value = val[:len(val)-2]
+
+	// Parse the final END\r\n
+	if resp, err := cn.rw.ReadSlice('\n'); err != nil {
+		return nil, err
+	} else {
+		if bytes.Equal(resp, []byte("END\r\n")) {
+			return nil, ErrCacheMiss
+		}
+	}
 
 	return it, nil
 }
@@ -483,7 +532,7 @@ func parseIncrDecr(resp []byte) (uint64, error) {
 	return strconv.ParseUint(string(resp[:len(resp)-2]), 10, 64)
 }
 
-func parseGet(resp []byte) (*Item, error) {
+func parseGetResponse(resp []byte) (*Item, error) {
 	if bytes.Equal(resp, []byte("END\r\n")) {
 		return nil, ErrCacheMiss
 	}

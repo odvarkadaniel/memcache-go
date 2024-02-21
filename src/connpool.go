@@ -21,6 +21,7 @@ type ConnectionPool interface {
 
 type Connection struct {
 	mu     sync.Mutex
+	owner  string
 	conn   net.Conn
 	rw     *bufio.ReadWriter
 	client *Client
