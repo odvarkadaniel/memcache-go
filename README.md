@@ -1,12 +1,22 @@
 # memcache-go
-Is a memcached client written in Golang.
+This is a memcached client written in Golang.
 
-## Installation
+## Install
 ```
 go get github.com/odvarkadaniel/memcache-go
 ```
+You can find some usage examples in the `examples` folder.
+
+## Contributing
+Before creating a pull request, create an issue first.
+
+## Documentation
+To see a list of all the functions, please visit [pkg.go.dev](https://pkg.go.dev/github.com/odvarkadaniel/memcache-go).
 
 ## Examples of usage
+As mentioned before, more examples can be seen in the `examples` folder.
+It might also be useful to look at the tests in `memcache_test.go` file to see
+how you can interact with the API.
 ```go
 package main
 
@@ -15,7 +25,7 @@ import (
 )
 
 func main() {
-  client := memcache.New([]string{"127.0.0.1:11211"})
+  client := memcache.New([]string{"127.0.0.1:11211"}, 1)
 
   item := &memcache.Item{
     Key: "Hello",
@@ -36,3 +46,6 @@ func main() {
   // Do something with the item.
 }
 ```
+
+## License
+This project uses `MIT LICENSE`, for more details, please see the `LICENSE` file.
