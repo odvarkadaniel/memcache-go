@@ -34,14 +34,13 @@ type Item struct {
 }
 
 type Client struct {
-	// mu       sync.Mutex
+	mu            sync.Mutex
 	router        *ServerList
 	idleConnCount int
 	connPool      map[string][]*Connection
 }
 
 type Connection struct {
-	mu    sync.Mutex
 	owner string
 	conn  net.Conn
 	rw    *bufio.ReadWriter

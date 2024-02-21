@@ -40,8 +40,11 @@ func (sl *ServerList) addServer(addresses ...string) error {
 	return nil
 }
 
-func (sl *ServerList) initializeConnectionPool(connCount int) (map[string][]*Connection, error) {
+func (sl *ServerList) InitializeConnectionPool(connCount int) (map[string][]*Connection, error) {
 	mcp := make(map[string][]*Connection)
+
+	sl.mu.RLock()
+	defer sl.mu.RUnlock()
 
 	for _, addr := range sl.addrs {
 		for i := 0; i < connCount; i++ {
@@ -64,6 +67,9 @@ func (sl *ServerList) initializeConnectionPool(connCount int) (map[string][]*Con
 }
 
 func (sl *ServerList) pickServer(key string) (net.Addr, error) {
+	sl.mu.RLock()
+	defer sl.mu.RUnlock()
+
 	if len(sl.addrs) == 0 {
 		return nil, ErrNoServers
 	}

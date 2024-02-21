@@ -22,7 +22,7 @@ func New(addresses []string, connCount int) *Client {
 		connPool:      make(map[string][]*Connection),
 	}
 
-	cmp, err := cl.router.initializeConnectionPool(cl.idleConnCount)
+	cmp, err := cl.router.InitializeConnectionPool(cl.idleConnCount)
 	if err != nil {
 		return nil
 	}
@@ -30,6 +30,23 @@ func New(addresses []string, connCount int) *Client {
 	cl.connPool = cmp
 
 	return cl
+}
+
+func (c *Client) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	var retErr error
+
+	for _, conns := range c.connPool {
+		for _, conn := range conns {
+			if err := conn.conn.Close(); err != nil {
+				retErr = err
+			}
+		}
+	}
+
+	return retErr
 }
 
 func (c *Client) Set(item *Item) error {
@@ -278,6 +295,9 @@ func (c *Client) createReadWriter(key string) (*Connection, error) {
 }
 
 func (c *Client) getFreeConn(addr string) *Connection {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	for {
 		for i, cn := range c.connPool[addr] {
 			c.connPool[addr] = c.connPool[addr][i+1:]
@@ -287,8 +307,7 @@ func (c *Client) getFreeConn(addr string) *Connection {
 
 			return cn
 		}
-		// TODO: Solve this better.
-		fmt.Println("Waiting for free connection...")
+
 		time.Sleep(10 * time.Millisecond)
 	}
 }
@@ -349,6 +368,9 @@ func (c *Client) incrDecrFn(verb string, cn *Connection, key string, delta uint6
 }
 
 func (c *Client) putBackConnection(cn *Connection) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	c.connPool[cn.owner] = append(c.connPool[cn.owner], cn)
 	cn.owner = ""
 }
