@@ -1,3 +1,25 @@
+// MIT License
+//
+// Copyright (c) 2024 Odvarka Daniel
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
 package memcache
 
 import (
@@ -10,6 +32,10 @@ import (
 	"time"
 )
 
+// New creates a client object.
+// We need a list of addresses and also a number of connections
+// we want to establish with each of the servers. These connections
+// are later used in the connection pool.
 func New(addresses []string, connCount int) *Client {
 	sl := &ServerList{}
 	if err := sl.addServer(addresses...); err != nil {
@@ -32,6 +58,7 @@ func New(addresses []string, connCount int) *Client {
 	return cl
 }
 
+// Close closes all the connections we established earlier to various servers.
 func (c *Client) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -49,6 +76,9 @@ func (c *Client) Close() error {
 	return retErr
 }
 
+// Set is used to set a value to a new key.
+// If a value is already set, the function
+// returns NOT_STORED.
 func (c *Client) Set(item *Item) error {
 	return c.set(item)
 }
@@ -66,6 +96,7 @@ func (c *Client) set(item *Item) error {
 	return c.storageFn("set", cn, item)
 }
 
+// Add creates a new item in the key/value store.
 func (c *Client) Add(item *Item) error {
 	return c.add(item)
 }
@@ -83,6 +114,7 @@ func (c *Client) add(item *Item) error {
 	return c.storageFn("add", cn, item)
 }
 
+// Replace replaces value for a given item's key.
 func (c *Client) Replace(item *Item) error {
 	return c.replace(item)
 }
@@ -100,6 +132,7 @@ func (c *Client) replace(item *Item) error {
 	return c.storageFn("replace", cn, item)
 }
 
+// Append appends data to a given item.
 func (c *Client) Append(item *Item) error {
 	return c.append(item)
 }
@@ -117,6 +150,7 @@ func (c *Client) append(item *Item) error {
 	return c.storageFn("append", cn, item)
 }
 
+// Prepend prepends data to a given item.
 func (c *Client) Prepend(item *Item) error {
 	return c.prepend(item)
 }
@@ -134,6 +168,7 @@ func (c *Client) prepend(item *Item) error {
 	return c.storageFn("prepend", cn, item)
 }
 
+// CompareAndSwap sets the data if it is not updated since last fetch.
 func (c *Client) CompareAndSwap(item *Item) error {
 	return c.compareAndSwap(item)
 }
@@ -151,6 +186,7 @@ func (c *Client) compareAndSwap(item *Item) error {
 	return c.storageFn("cas", cn, item)
 }
 
+// Gets returns an item for a given key.
 func (c *Client) Get(key string) (*Item, error) {
 	return c.get(key)
 }
@@ -168,7 +204,12 @@ func (c *Client) get(key string) (*Item, error) {
 	return c.retrieveFn("get", cn, key)
 }
 
+// Gets returns an item for a given key with CAS value.
 func (c *Client) Gets(key string) (*Item, error) {
+	return c.gets(key)
+}
+
+func (c *Client) gets(key string) (*Item, error) {
 	if ok := isKeyValid(key); !ok {
 		return nil, errors.New("given key is not valid")
 	}
@@ -181,6 +222,7 @@ func (c *Client) Gets(key string) (*Item, error) {
 	return c.retrieveFn("gets", cn, key)
 }
 
+// Delete remove a key from the key/value store.
 func (c *Client) Delete(key string) error {
 	return c.delete(key)
 }
@@ -198,6 +240,7 @@ func (c *Client) delete(key string) error {
 	return c.deleteFn("delete", cn, key)
 }
 
+// Incr increments a numerical value for a given key with a given delta.
 func (c *Client) Incr(key string, delta uint64) (uint64, error) {
 	return c.incr(key, delta)
 }
@@ -215,6 +258,7 @@ func (c *Client) incr(key string, delta uint64) (uint64, error) {
 	return c.incrDecrFn("incr", cn, key, delta)
 }
 
+// Decr decrements a numerical value for a given key with a given delta.
 func (c *Client) Decr(key string, delta uint64) (uint64, error) {
 	return c.decr(key, delta)
 }
@@ -312,6 +356,14 @@ func (c *Client) getFreeConn(addr string) *Connection {
 	}
 }
 
+func (c *Client) putBackConnection(cn *Connection) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.connPool[cn.owner] = append(c.connPool[cn.owner], cn)
+	cn.owner = ""
+}
+
 func parseStorageResponse(rw *bufio.ReadWriter) error {
 	line, err := rw.ReadSlice('\n')
 	if err != nil {
@@ -365,14 +417,6 @@ func (c *Client) incrDecrFn(verb string, cn *Connection, key string, delta uint6
 	}
 
 	return parseIncrDecr(line)
-}
-
-func (c *Client) putBackConnection(cn *Connection) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	c.connPool[cn.owner] = append(c.connPool[cn.owner], cn)
-	cn.owner = ""
 }
 
 func (c *Client) retrieveFn(verb string, cn *Connection, key string) (*Item, error) {
