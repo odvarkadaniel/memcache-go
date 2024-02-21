@@ -16,7 +16,21 @@ func New(addresses []string) *Client {
 		return nil
 	}
 
-	return &Client{router: sl}
+	cl := &Client{
+		router: sl,
+		// TODO: Change that to be configurable
+		connCount: 1,
+		connPool:  make(map[string][]*Connection),
+	}
+
+	cmp, err := cl.router.initializeConnectionPool(cl.connCount)
+	if err != nil {
+		return nil
+	}
+
+	cl.connPool = cmp
+
+	return cl
 }
 
 func (c *Client) Set(item *Item) error {
@@ -28,12 +42,12 @@ func (c *Client) set(item *Item) error {
 		return fmt.Errorf("given key is not valid")
 	}
 
-	rw, err := c.createReadWriter()
+	rw, err := c.createReadWriter2()
 	if err != nil {
 		return err
 	}
 
-	return c.storageFn("set", rw, item)
+	return c.storageFn("set", rw.rw, item)
 }
 
 func (c *Client) Add(item *Item) error {
@@ -130,12 +144,12 @@ func (c *Client) get(key string) (*Item, error) {
 		return nil, errors.New("given key is not valid")
 	}
 
-	rw, err := c.createReadWriter()
+	rw, err := c.createReadWriter2()
 	if err != nil {
 		return nil, err
 	}
 
-	return c.retrieveFn("get", rw, key)
+	return c.retrieveFn("get", rw.rw, key)
 }
 
 func (c *Client) Gets() {
@@ -247,7 +261,7 @@ func (c *Client) createReadWriter() (*bufio.ReadWriter, error) {
 
 	// Look into cache for a connection
 	if conn, ok := c.getFreeConn(addr.String()); ok {
-		return bufio.NewReadWriter(bufio.NewReader(*conn), bufio.NewWriter(*conn)), nil
+		return bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn)), nil
 	}
 
 	conn, err := net.Dial(addr.Network(), addr.String())
@@ -255,29 +269,95 @@ func (c *Client) createReadWriter() (*bufio.ReadWriter, error) {
 		return nil, err
 	}
 
-	x := &ConnPool{
-		idle:   []*net.Conn{&conn},
-		client: c,
-		rw:     bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn)),
+	// TODO: Proper new connpool
+	cn := &Connection{
+		conn: conn,
+		rw:   bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn)),
 	}
 
-	c.connPool[addr.String()] = x
+	c.connPool[addr.String()] = append(c.connPool[addr.String()], cn)
 
 	return bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn)), nil
 }
 
-func (c *Client) getFreeConn(addr string) (*net.Conn, bool) {
+// servers = {
+// 	1,
+// 	2,
+// 	3
+// }
+
+// clinet.cp[1] = connpool.idle[c1,c2,c3]
+// clinet.cp[2] = connpool.idle[c1,c2,c3]
+// clinet.cp[3] = connpool.idle[c1,c2,c3]
+
+// Get -> grab first connection and add 1 to used
+// Put -> append the connection to idle and substract 1 from used
+
+// connpool = {
+// 	mu       sync.Mutex
+// 	capacity uint
+// 	used     uint
+// 	idle     []net.Conn
+// 	rw       *bufio.ReadWriter
+// 	client   *Client
+// }
+
+func (c *Client) createReadWriter2() (*Connection, error) {
+	addr, err := c.router.pickServer()
+	if err != nil {
+		return nil, err
+	}
+
+	// Look into cache for a connection
+	if conn := c.getFreeConn2(addr.String()); conn != nil {
+		// We found the connection in connectionPool
+		return conn, nil
+	}
+
+	// conn, err := net.Dial(addr.Network(), addr.String())
+	// if err != nil {
+	// 	return nil, err
+	// }
+
+	// cn := &Connections{
+	// 	conn: conn,
+	// 	rw:   bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn)),
+	// }
+
+	// c.connPool[addr.String()] = append(c.connPool[addr.String()], cn)
+
+	// return bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn)), nil
+
+	return nil, nil
+}
+
+func (c *Client) getFreeConn2(addr string) *Connection {
+	for _, cn := range c.connPool[addr] {
+		return cn
+	}
+
+	return nil
+}
+
+func (c *Client) getFreeConn(addr string) (net.Conn, bool) {
 	if c.connPool[addr] == nil {
-		c.connPool = make(map[string]*ConnPool)
+		fmt.Println("here")
+		c.connPool = make(map[string][]*Connection)
 		return nil, false
 	}
 
-	conn := c.connPool[addr]
-	if conn.idle[0] != nil {
-		return conn.idle[0], true
-	}
+	// TODO: Actual use of idle slice
+	// conn := c.connPool[addr].Get()
+	// if conn == nil {
+	// 	return nil, false
+	// }
 
-	return nil, false
+	// conn := c.connPool[addr]
+	// if conn.idle[0] != nil {
+	// 	return conn.idle[0], true
+	// }
+
+	return nil, true
 }
 
 func parseStorageResponse(rw *bufio.ReadWriter) error {

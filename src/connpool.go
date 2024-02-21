@@ -19,27 +19,48 @@ type ConnectionPool interface {
 	Close(conn net.Conn) error
 }
 
-type ConnPool struct {
-	mu       sync.Mutex
-	capacity uint
-	used     uint
-	idle     []*net.Conn
-	rw       *bufio.ReadWriter
-	client   *Client
+type Connection struct {
+	mu     sync.Mutex
+	conn   net.Conn
+	rw     *bufio.ReadWriter
+	client *Client
 }
 
-func (cp *ConnPool) Get() (net.Conn, error) {
-	return nil, nil
-}
+func (cp *Connection) Get() net.Conn {
+	// Maybe use ticker to timeout?
+	// fmt.Println(cp)
+	// if cp == nil {
+	// 	return nil
+	// }
 
-func (cp *ConnPool) Put(conn net.Conn) error {
+	// for {
+	// 	if len(cp.idle) > 0 {
+	// 		conn := cp.idle[0]
+
+	// 		cp.idle = cp.idle[1:]
+
+	// 		return conn
+	// 	}
+	// 	time.Sleep(time.Second)
+	// 	fmt.Println("Sleeping:", len(cp.idle))
+	// }
 	return nil
 }
 
-func (cp *ConnPool) Close(conn net.Conn) error {
+func (cp *Connection) Put(conn net.Conn) error {
 	return nil
 }
 
-func NewConnPool() *ConnPool {
+func (cp *Connection) Close(conn net.Conn) error {
 	return nil
 }
+
+// func NewConnPool() *Connection {
+// 	return &Connection{
+// 		capacity: 5,
+// 		used:     0,
+// 		idle:     make([]net.Conn, 0, 5),
+// 		rw:       nil,
+// 		client:   nil,
+// 	}
+// }

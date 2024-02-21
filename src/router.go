@@ -1,14 +1,15 @@
 package memcache
 
 import (
+	"bufio"
+	"hash/crc32"
 	"net"
 	"strings"
 	"sync"
 )
 
 type ServerList struct {
-	// TODO: What about RWMutex?
-	mu    sync.Mutex
+	mu    sync.RWMutex
 	addrs []net.Addr
 }
 
@@ -39,10 +40,39 @@ func (sl *ServerList) addServer(addresses ...string) error {
 	return nil
 }
 
+func (sl *ServerList) initializeConnectionPool(connCount int) (map[string][]*Connection, error) {
+	mcp := make(map[string][]*Connection)
+
+	for _, addr := range sl.addrs {
+		for i := 0; i < connCount; i++ {
+
+			cp := &Connection{}
+
+			conn, err := net.Dial(addr.Network(), addr.String())
+			if err != nil {
+				return nil, err
+			}
+			cp.conn = conn
+
+			cp.rw = bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
+
+			mcp[addr.String()] = append(mcp[addr.String()], cp)
+		}
+	}
+
+	return mcp, nil
+}
+
 // TODO: Proper server selection.
 func (sl *ServerList) pickServer() (net.Addr, error) {
 	if len(sl.addrs) == 0 {
 		return nil, ErrNoServers
 	}
-	return sl.addrs[0], nil
+
+	// return sl.addrs[0], nil
+
+	// TODO: Fix
+	hash := crc32.ChecksumIEEE([]byte("todo"))
+
+	return sl.addrs[int(hash)%len(sl.addrs)], nil
 }
