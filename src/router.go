@@ -63,16 +63,10 @@ func (sl *ServerList) initializeConnectionPool(connCount int) (map[string][]*Con
 	return mcp, nil
 }
 
-// TODO: Proper server selection.
-func (sl *ServerList) pickServer() (net.Addr, error) {
+func (sl *ServerList) pickServer(key string) (net.Addr, error) {
 	if len(sl.addrs) == 0 {
 		return nil, ErrNoServers
 	}
 
-	// return sl.addrs[0], nil
-
-	// TODO: Fix
-	hash := crc32.ChecksumIEEE([]byte("todo"))
-
-	return sl.addrs[int(hash)%len(sl.addrs)], nil
+	return sl.addrs[int(crc32.ChecksumIEEE([]byte(key)))%len(sl.addrs)], nil
 }

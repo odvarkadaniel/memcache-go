@@ -20,7 +20,7 @@ var _ = Describe("Memcache Client Tests", Label("StorageCommands"), func() {
 	var toIncr *Item
 
 	BeforeEach(func() {
-		mc = New([]string{defaultAddr})
+		mc = New([]string{defaultAddr}, 1)
 
 		it1 = &Item{
 			Key:        "hello",

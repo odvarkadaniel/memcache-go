@@ -5,26 +5,24 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"net"
 	"strconv"
 	"strings"
 	"time"
 )
 
-func New(addresses []string) *Client {
+func New(addresses []string, connCount int) *Client {
 	sl := &ServerList{}
 	if err := sl.addServer(addresses...); err != nil {
 		return nil
 	}
 
 	cl := &Client{
-		router: sl,
-		// TODO: Change that to be configurable
-		connCount: 1,
-		connPool:  make(map[string][]*Connection),
+		router:        sl,
+		idleConnCount: connCount,
+		connPool:      make(map[string][]*Connection),
 	}
 
-	cmp, err := cl.router.initializeConnectionPool(cl.connCount)
+	cmp, err := cl.router.initializeConnectionPool(cl.idleConnCount)
 	if err != nil {
 		return nil
 	}
@@ -43,7 +41,7 @@ func (c *Client) set(item *Item) error {
 		return fmt.Errorf("given key is not valid")
 	}
 
-	cn, err := c.createReadWriter2()
+	cn, err := c.createReadWriter(item.Key)
 	if err != nil {
 		return err
 	}
@@ -60,7 +58,7 @@ func (c *Client) add(item *Item) error {
 		return fmt.Errorf("given key is not valid")
 	}
 
-	cn, err := c.createReadWriter2()
+	cn, err := c.createReadWriter(item.Key)
 	if err != nil {
 		return err
 	}
@@ -77,7 +75,7 @@ func (c *Client) replace(item *Item) error {
 		return fmt.Errorf("given key is not valid")
 	}
 
-	cn, err := c.createReadWriter2()
+	cn, err := c.createReadWriter(item.Key)
 	if err != nil {
 		return err
 	}
@@ -94,7 +92,7 @@ func (c *Client) append(item *Item) error {
 		return fmt.Errorf("given key is not valid")
 	}
 
-	cn, err := c.createReadWriter2()
+	cn, err := c.createReadWriter(item.Key)
 	if err != nil {
 		return err
 	}
@@ -111,7 +109,7 @@ func (c *Client) prepend(item *Item) error {
 		return fmt.Errorf("given key is not valid")
 	}
 
-	cn, err := c.createReadWriter2()
+	cn, err := c.createReadWriter(item.Key)
 	if err != nil {
 		return err
 	}
@@ -128,7 +126,7 @@ func (c *Client) compareAndSwap(item *Item) error {
 		return fmt.Errorf("given key is not valid")
 	}
 
-	cn, err := c.createReadWriter2()
+	cn, err := c.createReadWriter(item.Key)
 	if err != nil {
 		return err
 	}
@@ -145,7 +143,7 @@ func (c *Client) get(key string) (*Item, error) {
 		return nil, errors.New("given key is not valid")
 	}
 
-	cn, err := c.createReadWriter2()
+	cn, err := c.createReadWriter(key)
 	if err != nil {
 		return nil, err
 	}
@@ -153,8 +151,17 @@ func (c *Client) get(key string) (*Item, error) {
 	return c.retrieveFn("get", cn, key)
 }
 
-func (c *Client) Gets() {
-	panic("Not yet implemented")
+func (c *Client) Gets(key string) (*Item, error) {
+	if ok := isKeyValid(key); !ok {
+		return nil, errors.New("given key is not valid")
+	}
+
+	cn, err := c.createReadWriter(key)
+	if err != nil {
+		return nil, err
+	}
+
+	return c.retrieveFn("gets", cn, key)
 }
 
 func (c *Client) Delete(key string) error {
@@ -166,7 +173,7 @@ func (c *Client) delete(key string) error {
 		return errors.New("given key is not valid")
 	}
 
-	cn, err := c.createReadWriter2()
+	cn, err := c.createReadWriter(key)
 	if err != nil {
 		return err
 	}
@@ -183,7 +190,7 @@ func (c *Client) incr(key string, delta uint64) (uint64, error) {
 		return 0, errors.New("given key is not valid")
 	}
 
-	cn, err := c.createReadWriter2()
+	cn, err := c.createReadWriter(key)
 	if err != nil {
 		return 0, err
 	}
@@ -200,7 +207,7 @@ func (c *Client) decr(key string, delta uint64) (uint64, error) {
 		return 0, errors.New("given key is not valid")
 	}
 
-	cn, err := c.createReadWriter2()
+	cn, err := c.createReadWriter(key)
 	if err != nil {
 		return 0, err
 	}
@@ -249,115 +256,28 @@ func (c *Client) storageFn(verb string, cn *Connection, item *Item) error {
 		return err
 	}
 
-	line, err := cn.rw.ReadSlice('\n')
-	if err != nil {
+	if err := parseStorageResponse(cn.rw); err != nil {
 		return err
 	}
 
-	switch {
-	case bytes.Equal(line, []byte("STORED\r\n")):
-		return nil
-	case bytes.Equal(line, []byte("ERROR\r\n")):
-		return ErrError
-	case bytes.Equal(line, []byte("NOT_STORED\r\n")):
-		return ErrNotStored
-	case bytes.Equal(line, []byte("CLIENT_ERROR\r\n")):
-		return ErrClientError
-	case bytes.Equal(line, []byte("EXISTS\r\n")):
-		return ErrExists
-	case bytes.Equal(line, []byte("NOT_FOUND\r\n")):
-		return ErrCacheMiss
-	default:
-		// This should not happen.
-		panic(string(line) + " is not a valid response")
-	}
-
-	// if err := parseStorageResponse(cn.rw); err != nil {
-	// 	return err
-	// }
-
-	// return nil
+	return nil
 }
 
-func (c *Client) createReadWriter() (*bufio.ReadWriter, error) {
-	addr, err := c.router.pickServer()
+func (c *Client) createReadWriter(key string) (*Connection, error) {
+	addr, err := c.router.pickServer(key)
 	if err != nil {
 		return nil, err
 	}
 
 	// Look into cache for a connection
-	if conn, ok := c.getFreeConn(addr.String()); ok {
-		return bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn)), nil
-	}
-
-	conn, err := net.Dial(addr.Network(), addr.String())
-	if err != nil {
-		return nil, err
-	}
-
-	// TODO: Proper new connpool
-	cn := &Connection{
-		conn: conn,
-		rw:   bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn)),
-	}
-
-	c.connPool[addr.String()] = append(c.connPool[addr.String()], cn)
-
-	return bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn)), nil
-}
-
-// servers = {
-// 	1,
-// 	2,
-// 	3
-// }
-
-// clinet.cp[1] = connpool.idle[c1,c2,c3]
-// clinet.cp[2] = connpool.idle[c1,c2,c3]
-// clinet.cp[3] = connpool.idle[c1,c2,c3]
-
-// Get -> grab first connection and add 1 to used
-// Put -> append the connection to idle and substract 1 from used
-
-// connpool = {
-// 	mu       sync.Mutex
-// 	capacity uint
-// 	used     uint
-// 	idle     []net.Conn
-// 	rw       *bufio.ReadWriter
-// 	client   *Client
-// }
-
-func (c *Client) createReadWriter2() (*Connection, error) {
-	addr, err := c.router.pickServer()
-	if err != nil {
-		return nil, err
-	}
-
-	// Look into cache for a connection
-	if conn := c.getFreeConn2(addr.String()); conn != nil {
-		// We found the connection in connectionPool
+	if conn := c.getFreeConn(addr.String()); conn != nil {
 		return conn, nil
 	}
-
-	// conn, err := net.Dial(addr.Network(), addr.String())
-	// if err != nil {
-	// 	return nil, err
-	// }
-
-	// cn := &Connections{
-	// 	conn: conn,
-	// 	rw:   bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn)),
-	// }
-
-	// c.connPool[addr.String()] = append(c.connPool[addr.String()], cn)
-
-	// return bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn)), nil
 
 	return nil, nil
 }
 
-func (c *Client) getFreeConn2(addr string) *Connection {
+func (c *Client) getFreeConn(addr string) *Connection {
 	for {
 		for i, cn := range c.connPool[addr] {
 			c.connPool[addr] = c.connPool[addr][i+1:]
@@ -371,26 +291,6 @@ func (c *Client) getFreeConn2(addr string) *Connection {
 		fmt.Println("Waiting for free connection...")
 		time.Sleep(10 * time.Millisecond)
 	}
-}
-
-func (c *Client) getFreeConn(addr string) (net.Conn, bool) {
-	if c.connPool[addr] == nil {
-		c.connPool = make(map[string][]*Connection)
-		return nil, false
-	}
-
-	// TODO: Actual use of idle slice
-	// conn := c.connPool[addr].Get()
-	// if conn == nil {
-	// 	return nil, false
-	// }
-
-	// conn := c.connPool[addr]
-	// if conn.idle[0] != nil {
-	// 	return conn.idle[0], true
-	// }
-
-	return nil, true
 }
 
 func parseStorageResponse(rw *bufio.ReadWriter) error {
@@ -458,8 +358,8 @@ func (c *Client) retrieveFn(verb string, cn *Connection, key string) (*Item, err
 
 	defer c.putBackConnection(cn)
 
-	if verb == "cas" {
-		return nil, fmt.Errorf("TODO: CAS not yet implemented for retrieval commands")
+	if verb == "gets" {
+		cmd = fmt.Sprintf("%s %s\r\n", verb, key)
 	} else {
 		cmd = fmt.Sprintf("%s %s\r\n", verb, key)
 	}
@@ -540,6 +440,16 @@ func parseGetResponse(resp []byte) (*Item, error) {
 	splitResp := strings.Split(string(resp), " ")
 
 	flags, _ := strconv.Atoi(splitResp[2])
+
+	if len(splitResp) == 5 {
+		cas, _ := strconv.Atoi(splitResp[4])
+
+		return &Item{
+			Key:   splitResp[1],
+			Flags: int32(flags),
+			CAS:   int64(cas),
+		}, nil
+	}
 
 	return &Item{
 		Key:   splitResp[1],

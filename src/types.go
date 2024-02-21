@@ -1,7 +1,10 @@
 package memcache
 
 import (
+	"bufio"
 	"errors"
+	"net"
+	"sync"
 	"time"
 )
 
@@ -9,7 +12,6 @@ type ConnType int8
 
 const (
 	TCP ConnType = iota
-	UDP
 	UNIX
 )
 
@@ -33,9 +35,14 @@ type Item struct {
 
 type Client struct {
 	// mu       sync.Mutex
-	router    *ServerList
-	connCount int
-	connPool  map[string][]*Connection
+	router        *ServerList
+	idleConnCount int
+	connPool      map[string][]*Connection
+}
 
-	// ...
+type Connection struct {
+	mu    sync.Mutex
+	owner string
+	conn  net.Conn
+	rw    *bufio.ReadWriter
 }
